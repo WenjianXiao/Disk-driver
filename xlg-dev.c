@@ -29,14 +29,15 @@ static int xlg_open(struct block_device *bd, fmode_t mode)
 {
 	printk(KERN_ALERT "------>xlg_open()");
 	return 0;
-	/*struct xlg_dev *dev;
-	DOOR(bd, bd->bd_disk, bd->bd_disk->private_data);
-	dev = bd->bd_disk->private_data;
-	DOOR(bd, bd->bd_disk, bd->bd_disk->private_data);
-	spin_lock(&dev->lock);
-	dev->users++;
-	spin_unlock(&dev->lock);
-	return 0;*/
+
+//	struct xlg_dev *dev;
+//	ASSERT(bd, bd->bd_disk, bd->bd_disk->private_data);
+//	dev = bd->bd_disk->private_data;
+//	DOOR(bd, bd->bd_disk, bd->bd_disk->private_data);
+//	spin_lock(&dev->lock);
+//	dev->users++;
+//	spin_unlock(&dev->lock);
+//	return 0;
 }
 
 /**
@@ -47,7 +48,7 @@ static int xlg_release(struct gendisk *gend, fmode_t mode)
 	printk(KERN_ALERT "------>xlg_release");
 	return 0;
 //	struct xlg_dev *dev;
-//	DOOR(gend, gend->private_data);
+//	ASSERT(gend, gend->private_data);
 //	dev = gend->private_data;
 //	spin_lock(&dev->lock);
 //	dev->users--;
@@ -64,8 +65,8 @@ static int xlg_ioctl(struct block_device *bd, fmode_t mode,
 	long size;
 	struct hd_geometry geo;
 	struct xlg_dev *dev;
-	printk(KERN_ALERT "------>xlg_ioctl()");
-	DOOR(bd, bd->bd_disk, bd->bd_disk->private_data);
+
+	ASSERT(bd, bd->bd_disk, bd->bd_disk->private_data);
 	dev = bd->bd_disk->private_data;
 
 	switch (cmd) {
@@ -83,10 +84,8 @@ static int xlg_ioctl(struct block_device *bd, fmode_t mode,
 		geo.start = 4;
 		if (copy_to_user((void __user *) arg, &geo, sizeof(geo)))
 			return -EFAULT;
-		printk(KERN_ALERT "------>end xlg_ioctl()");
 		return 0;
 	}
-	printk(KERN_ALERT "------> Unknown command end xlg_ioctl()");
 	return -ENOTTY;		/* Unknown command */
 }
 
@@ -111,7 +110,6 @@ static int xlg_make_request(request_queue_t *q, struct bio *bio)
 	int i = 0;
 	sector_t sector = bio->bi_sector & ~7;
 	
-	printk(KERN_ALERT "------>xlg_make_request()");
 	bio_for_each_segment(bv, bio, i) {
 		ret = xcache_xfer(bv, sector, bio_data_dir(bio));
 		if (ret) 
@@ -119,7 +117,6 @@ static int xlg_make_request(request_queue_t *q, struct bio *bio)
 		sector += 8;
 	}
 	bio_endio(bio, ret);
-	printk(KERN_ALERT "------>end xlg_make_request()");
 	return 0;
 }
 
@@ -129,7 +126,6 @@ static int xlg_make_request(request_queue_t *q, struct bio *bio)
 int setup_device(void)
 {
 	int ret;
-	printk(KERN_ALERT "------>setup_devcie()");
 
 	/*
 	 * Initialize the device structure
@@ -154,20 +150,16 @@ int setup_device(void)
 	 */
 	dev->gd = alloc_disk(XLG_MINORS);
 	if (! dev->gd) {
-		printk (KERN_NOTICE "alloc_disk failure\n");
 		ret = -ENOMEM;
 		goto out_vfree;
 	}
 	dev->gd->major = xlg_major;
 	dev->gd->first_minor = xlg_first_minor;
-	printk(KERN_ALERT "0.1 module refcount:%d", module_refcount(THIS_MODULE));
 	dev->gd->fops = &xlg_ops;
-	printk(KERN_ALERT "0.2 module refcount:%d", module_refcount(THIS_MODULE));
 	dev->gd->queue = dev->queue;
 	dev->gd->private_data = dev;
 	snprintf (dev->gd->disk_name, 32, xd_name);
 	set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
-	printk(KERN_ALERT "------>END setup_device normally");
 	return 0;
 out_vfree:
 	return ret;
@@ -179,45 +171,37 @@ out_vfree:
 static int __init xlg_init(void)
 {
 	int ret = 0;
-	printk(KERN_ALERT "00 module refcount:%d", module_refcount(THIS_MODULE));
+
 	/*
 	 * Get registered.
 	 */
 	xlg_major = register_blkdev(xlg_major, xd_name);
 	if (xlg_major <= 0) {
-		printk(KERN_WARNING "xlg: unable to get major number\n");
 		return -EBUSY;
 	}
-	printk(KERN_ALERT "00 module refcount:%d", module_refcount(THIS_MODULE));
+	
 	/*
 	 *Allocate the device and initialize it
 	 */
 	dev = kmalloc(sizeof(struct xlg_dev), GFP_KERNEL);
-	DOOR(dev);
+	ASSERT(dev);
 	if (dev == NULL) {
 		goto xlg_dev_init_failed;
 	}
 
-	printk(KERN_ALERT "0 module refcount:%d", module_refcount(THIS_MODULE));
 	ret = setup_device();
 	if (ret)
 		goto xlg_dev_init_failed;
-	printk(KERN_ALERT "1 module refcount:%d", module_refcount(THIS_MODULE));
 	if (IS_ERR(xph_init())) {
 		ret = -ENODEV;
-		printk(KERN_ALERT "XPH_ERR");
 		goto xlg_dev_init_failed;
 	}
-	printk(KERN_ALERT "2 module refcount:%d", module_refcount(THIS_MODULE));
 	ret = xcache_init();
 	if (ret) 
 		goto xcache_dev_init_failed;
-	printk(KERN_ALERT "3 module refcount:%d", module_refcount(THIS_MODULE));
-	DOOR(dev->gd);
+	
+	ASSERT(dev->gd);
 	add_disk(dev->gd);
-	printk(KERN_ALERT "4 module refcount:%d", module_refcount(THIS_MODULE));
-	printk(KERN_ALERT "%d", ret);
-	printk(KERN_ALERT "------> end xlg_init normally");
 	return ret;
 
 xcache_dev_init_failed:
@@ -233,16 +217,12 @@ xlg_dev_init_failed:
 static void __exit xlg_exit(void)
 {
 	if (dev->gd) {
-		printk(KERN_ALERT "del_gendisk");
 		del_gendisk(dev->gd);
 	}
 	if (dev->queue) {
-		printk(KERN_ALERT "BLK_PUT_QUEUE");
 		blk_put_queue(dev->queue);
 	}
-	printk(KERN_ALERT "start xcache_destroy...");
 	xcache_destroy();
-	printk(KERN_ALERT "end xcache_destroy...");
 	xph_destroy();
 	unregister_blkdev(xlg_major, xd_name);
 	kfree(dev);

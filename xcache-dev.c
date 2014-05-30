@@ -23,10 +23,13 @@ struct cache_block *get_cache_block(struct free_zone *fz)
 {
 	struct cache_block *cb = NULL;
 	unsigned long flag = 0;
-	struct list_head *entry = fz->free_blocks.next;
-	if (!entry)
-		return NULL;
+	struct list_head *entry;
 	spin_lock_irqsave(&fz->lock, flag);
+	entry = fz->free_blocks.next;
+	if (!entry) {
+		spin_unlock_irqrestore(&fz->lock, flag);
+		return NULL;
+	}
 	list_del_init(entry);
 	atomic_dec(&fz->size);
 	spin_unlock_irqrestore(&fz->lock, flag);
@@ -81,6 +84,7 @@ static void cache_blocks_add(struct cache_block *blk, struct cache_zone *cz)
 	 */
 	list_move(&blk->block_list, &cz->cache_blocks);
 }
+
 /**
  *find_cache_block - find a cache block by sector as the index.
  *Firstly find it in the radix tree.If not found,get a new cache
@@ -103,14 +107,22 @@ static int find_cache_block(sector_t sector, struct cache_block **cb)
 	struct cache_zone *cz = &cache->cache_zone;
 	struct free_zone *fz = &cache->free_zone;
 
-	printk(KERN_ALERT "------>find_cache_block()");
 	/* 
 	 * Everytime check whether the cache block is in the radix_tree firstly. 
 	 * Avoid the conflict of the block in the radix tree.
 	 */
+	spin_lock_irqsave(&cz->lock, flag);
+	*cb = radix_tree_lookup(&cz->rdtree, sector);
+	if (*cb) {
+		atomic_inc(&(*cb)->ref_cnt);
+		cache_blocks_add(*cb, cz);
+		spin_unlock_irqrestore(&cz->lock, flag);
+		return ret;
+	}
+	spin_unlock_irqrestore(&cz->lock, flag);
+
 retry:
 	wait_event(cache->waitq, (atomic_read(&fz->size)) > 0);
-	printk(KERN_ALERT "------>wait_free_zone");
 
 	spin_lock_irqsave(&cz->lock, flag);
 	*cb = radix_tree_lookup(&cz->rdtree, sector);
@@ -133,7 +145,6 @@ retry:
 	cache_blocks_add(*cb, cz);
 unlock:
 	spin_unlock_irqrestore(&cz->lock, flag);
-	printk(KERN_ALERT "<------find_cache_block");
 	return ret;
 }
 
@@ -147,22 +158,19 @@ unlock:
 static void cache_block_xfer(struct bio_vec *bv, struct cache_block
 		*cb, int dir)
 {
-	char *buffer = page_address(bv->bv_page);
-	char *cache = page_address(cb->page);
-	printk(KERN_ALERT "------>cache_block_xfer:");
-	if (dir == READ)
-		printk(KERN_ALERT "READ sectore :%lu",cb->sector);
-	else 
-		printk(KERN_ALERT "WRITE sectore :%lu", cb->sector);
+	char *buffer;
+	char *cache;
+	ASSERT(cb, bv);
+	buffer = page_address(bv->bv_page);
+	cache = page_address(cb->page);
+	ASSERT(buffer, cache);
 	while (!test_bit(UPTODATE_BIT, &cb->flag)) 
 		wait_event(cb->waitq, test_bit(UPTODATE_BIT, &cb->flag));
 	if (dir == READ) {
-		printk(KERN_ALERT "------>cache_block_read");
 		memcpy(buffer+bv->bv_offset, cache+bv->bv_offset, 
 			bv->bv_len);
 	}
 	else {
-		printk(KERN_ALERT "------>cache_block_write");
 		memcpy(cache+bv->bv_offset, buffer+bv->bv_offset,
 				bv->bv_len);
 		set_bit(DIRTY_BIT, &cb->flag);
@@ -170,7 +178,7 @@ static void cache_block_xfer(struct bio_vec *bv, struct cache_block
 }
 
 /**
- *
+ *wait_schedule - sleep when it can't reach the condition
  */
 static int wait_schedule(void *data)
 {
@@ -193,18 +201,15 @@ int xcache_xfer(struct bio_vec *bv, sector_t sector, unsigned long dir)
 	struct cache_block *cb = NULL;
 	int ret = 0;
 
-	printk(KERN_ALERT "------>xcache_xfer()");
 	ret = find_cache_block(sector, &cb);
 	if (!cb) 
 		goto failed;
 
-	printk(KERN_ALERT "------>wait lock");
 	/* check whether the block has been locked. If not,lock it.Or wait */
-	while (test_and_set_bit(LOCK_BIT, &cb->flag) ) {
+	while (test_and_set_bit(LOCK_BIT, &cb->flag)) {
 		wait_event(cb->waitq, !test_bit(LOCK_BIT, &cb->flag));
 	}
 	
-	printk(KERN_ALERT "------>end wait lock");
 	
 	/* 
 	 *ret == 1 imply the data is not in the cache zone. So firstly update 
@@ -212,24 +217,18 @@ int xcache_xfer(struct bio_vec *bv, sector_t sector, unsigned long dir)
 	 */
 
 	if (ret) {
-		printk(KERN_ALERT "------>from_free_zone");
 		if (dir == READ || bv->bv_len < CBLOCK_SIZE) {
 			clear_bit(UPTODATE_BIT, &cb->flag);
-			printk(KERN_ALERT "------>free_zone_uptodate");
-			//xph_bio_read_block(cb);
 			schedule_work(&cb->update_work);
 		}
 		else {
-			printk(KERN_ALERT "full block");
 			set_bit(UPTODATE_BIT, &cb->flag);
 		}
-
 	}
 	/*
 	 *Wait if the cache block is writing back.
 	 */
 	else {
-		printk(KERN_ALERT "------>wait writing back");
 		set_bit(UPTODATE_BIT, &cb->flag);
 		wait_on_bit(&cb->flag, WRITING_BACK_BIT, wait_schedule, TASK_INTERRUPTIBLE);
 	}
@@ -254,7 +253,7 @@ failed:
 static inline int cache_need_flush(struct xcache *cache)
 {
 	int size;
-	DOOR(cache);
+	
 	size = atomic_read(&cache->free_zone.size);
 	if (size <= (NBLOCKS >> 4))
 		return 1;
@@ -275,7 +274,6 @@ static struct cache_block *get_coldest_cache_block(struct xcache *cache) {
 	struct cache_zone *cz;
 	unsigned long flag = 0;
 	
-	DOOR(cache);
 	cz = &cache->cache_zone;
 	spin_lock_irqsave(&cz->lock, flag);
 	list_for_each_entry_safe_reverse(cb, next, &cz->cache_blocks, block_list) {
@@ -298,7 +296,6 @@ void recycle_cache_block(struct cache_block *colbk)
 	struct cache_zone *cz = &dev->cache.cache_zone;
 	unsigned long flag;
 	
-	printk(KERN_ALERT "------>recycle_cache_block");
 	spin_lock_irqsave(&cz->lock, flag);
 	if (!atomic_read(&colbk->ref_cnt)) {
 		struct cache_block *cb = NULL;
@@ -324,7 +321,6 @@ static void flush_cache_block(struct cache_block *colbk)
 	if (!colbk)
 		return;
 	if (test_bit(DIRTY_BIT, &colbk->flag)) {
-		printk(KERN_ALERT "flush is writing backe !");
 		xph_bio_write_block(colbk);
 	}
 	else 
@@ -337,18 +333,15 @@ static void flush_cache_block(struct cache_block *colbk)
 static void flush_cold_cache_block(struct work_struct *work)
 {
 	struct xcache *cache = &dev->cache;
-	printk(KERN_ALERT "------>flush_cold_cache_block");
 	if (cache_need_flush(cache)) {
 		int i;
 		int free_size;
-		printk(KERN_ALERT "------>need_flush_cold_cache_block");
 		free_size = atomic_read(&cache->free_zone.size);
 		for (i = 0; i < (NBLOCKS>>4) - free_size; i++) {
 			struct cache_block *colbk = get_coldest_cache_block(cache);
 			flush_cache_block(colbk);
 		}
 	}
-	printk(KERN_ALERT "<------END flush_cold_cache_block");
 }
 
 /**
@@ -386,7 +379,6 @@ static void free_all_cache_blocks(struct list_head *free_blocks)
 	struct cache_block *cur;
 	struct cache_block *next;
 
-	DOOR(free_blocks);
 	list_for_each_entry_safe(cur, next, free_blocks, block_list) {
 		list_del(&cur->block_list);
 		__free_page(cur->page);
@@ -418,7 +410,6 @@ int xcache_init()
 	int i = 0;
 	struct cache_block *cb;
 	
-	printk(KERN_ALERT "------>xcache_init()");
 	/* Initialize the cache_zone structure; */
 	INIT_LIST_HEAD(&cz->cache_blocks);
 	spin_lock_init(&cz->lock);
@@ -444,7 +435,6 @@ int xcache_init()
 		list_add(&cb->block_list, &fz->free_blocks);
 		atomic_inc(&fz->size);
 	}
-	printk(KERN_ALERT "<------end xcache_init()");
 	return 0;
 new_cache_block_failed:
 	free_all_cache_blocks(&fz->free_blocks);

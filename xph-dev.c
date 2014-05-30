@@ -17,7 +17,6 @@ extern struct xlg_dev *dev;
 void read_xph_endio(struct bio *bio, int err) 
 {
 	struct cache_block *blk = bio->bi_private;
-	printk(KERN_ALERT  "------>read_xph_endio()");
 	set_bit(UPTODATE_BIT, &blk->flag);
 	wake_up(&blk->waitq);
 }
@@ -29,7 +28,6 @@ void write_xph_endio(struct bio *bio, int err)
 {
 	struct cache_block *blk = bio->bi_private;
 
-	printk(KERN_ALERT "------>write_xph_endio");
 	clear_bit(DIRTY_BIT, &blk->flag);
 	recycle_cache_block(blk);
 }
@@ -41,13 +39,11 @@ static struct bio *xph_construct_bio(int dir, struct cache_block *cb)
 {
 	struct bio *bio;
 	
-	printk(KERN_ALERT "xph_construct_bio");
 	bio = bio_alloc(GFP_KERNEL, 1);
 	if (!bio)
 		return bio;
 	bio->bi_sector = cb->sector;
 	bio->bi_bdev = dev->bdev;
-	DOOR(dev->bdev);
 	bio->bi_rw = dir;
 	bio->bi_vcnt = 1;
 	bio->bi_idx = 0;
@@ -57,11 +53,9 @@ static struct bio *xph_construct_bio(int dir, struct cache_block *cb)
 	bio->bi_io_vec[0].bv_page = cb->page;
 	bio->bi_private = cb;
 	if (dir == WRITE) {
-		printk(KERN_ALERT "WRITE......");
 		bio->bi_end_io = write_xph_endio;
 	}
 	else if (dir == READ) {
-		printk(KERN_ALERT "READ......");
 		bio->bi_end_io = read_xph_endio;
 	}
 
@@ -76,7 +70,6 @@ int  xph_bio_xfer(int dir, struct cache_block *cb)
 	struct bio *bio;
 	int ret = 0;
 
-	printk(KERN_ALERT "------>xph_bio_xfer(dir,cb)");
 	bio = xph_construct_bio(dir, cb);
 	if (!bio) {
 		ret = -ENOMEM;
@@ -86,14 +79,10 @@ int  xph_bio_xfer(int dir, struct cache_block *cb)
 			set_bit(UPTODATE_BIT, &cb->flag);
 			wake_up(&cb->waitq);
 		}
-		printk(KERN_ALERT "------>xph_construct_bio() failed.");
 		return ret;
 	}
 	/* block/block-core.c */
 	submit_bio(dir, bio);
-	//bio_endio(bio, ret);
-	//bio_put(bio);
-	printk(KERN_ALERT "<------xph_bio_xfer(dir,cb),ret = %d", ret);
 	return ret;
 }
 /**

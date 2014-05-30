@@ -21,9 +21,9 @@
 #define GATE(...) FOR_EACH(SDOOR, __VA_ARGS__)
 
 #ifdef _SAFETY_DOOR_
-#define DOOR(...) GATE(__VA_ARGS__)
+#define ASSERT(...) GATE(__VA_ARGS__)
 #else
-#define DOOR(...)
+#define ASSERT(...)
 #endif
 
 #endif/*LXQ_ASSERT_H*/

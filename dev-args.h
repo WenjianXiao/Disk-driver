@@ -23,4 +23,5 @@
 #define HARDSECT_SIZE		(512)			/* Hard disk sector size */
 #define NSECTORS		(PH_VOL/HARDSECT_SIZE)	/* Hard disk sector num */
 #define PHD_NAME		"/dev/sdb"		/* physical disk name */
+
 #endif
